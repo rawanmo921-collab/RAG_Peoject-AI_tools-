@@ -17,7 +17,7 @@ The job here is more than just "retrieve an old reply":
 
 Generating the answer itself:
   - If the ANTHROPIC_API_KEY environment variable is set, it actually
-    calls the Claude API (model: claude-3-5-haiku-latest) to generate a
+    calls the Claude API (model: claude-haiku-4-5-20251001) to generate a
     natural answer grounded in the retrieved context.
   - If it's not set, it falls back to an "extractive template" that
     merges the most relevant snippet from each retrieved reply, so the
@@ -160,7 +160,7 @@ def call_llm_generate(prompt: str) -> str:
 
     client = anthropic.Anthropic(api_key=api_key)
     response = client.messages.create(
-        model="claude-3-5-haiku-latest",
+        model="claude-haiku-4-5-20251001",
         max_tokens=300,
         messages=[{"role": "user", "content": prompt}],
     )

@@ -1,3 +1,21 @@
+"""
+assignment1_rag_enhancements.py
+==================================
+ده نسخة موسعة من ملف الأساينمنت الأصلي (Assignment_AI_Tools.py)، بيضيف فوق
+مقارنة الـ retrievers (TF-IDF / BM25 / Embeddings / Hybrid) طبقة RAG كاملة
+فيها الميزات الخمسة المطلوبة:
+
+  1. دمج ردود متعددة في رد واحد ذكي            -> merge_multiple_replies()
+  2. التعامل مع الحالات اللي مفيش فيها تطابق قوي -> is_low_confidence() + رسالة تحويل
+  3. تخصيص الرد حسب البراند                      -> brand_filtered_indices() + generate_response(..., brand=...)
+  4. تقييم جودة الرد المُولَّد (مش بس دقة الاسترجاع) -> evaluate_generated_answer()
+  5. شات فاكر المحادثة من أول العميل لحد آخرها     -> class ChatSession
+
+المنطق الأساسي للاسترجاع (retrieval) هو نفسه بالظبط اللي في الملف الأصلي
+(TF-IDF, BM25, Embeddings, Hybrid) - اتنقل هنا زي ما هو، والإضافات كلها
+جواه في قسم "RAG LAYER" تحت.
+"""
+
 import os
 import re
 import numpy as np
@@ -74,6 +92,7 @@ def build_bm25(documents):
 
 
 class SVDEmbeddingModel:
+    """بديل offline بنفس واجهة .encode() بتاعة SentenceTransformer."""
 
     def __init__(self, documents, n_components=30):
         self.vectorizer = TfidfVectorizer()
@@ -114,7 +133,11 @@ def min_max_normalize(scores):
 
 
 def retrieve_top_k_hybrid_scored(query, bm25, model, doc_embeddings, alpha=0.6, k=3, allowed_indices=None):
-   
+    """
+    نفس retrieve_top_k_hybrid بتاعة الملف الأصلي، بس بترجع الـ score كمان
+    (مش الترتيب بس) عشان نقدر نبني عليه "confidence"، وبتقبل allowed_indices
+    (فلترة اختيارية على أندكسات معينة بس - ده اللي هيسمح بتخصيص البراند).
+    """
     bm25_scores = bm25.get_scores(simple_tokenize(query))
     query_embedding = model.encode([query], convert_to_numpy=True, normalize_embeddings=True)
     semantic_scores = cosine_similarity(query_embedding, doc_embeddings).flatten()
@@ -160,7 +183,14 @@ def is_low_confidence(best_score, threshold=CONFIDENCE_THRESHOLD):
 # --- 1) دمج ردود متعددة في رد واحد ذكي --------------------------------------
 
 def merge_multiple_replies(query, documents, retrieved_indices):
-    
+    """
+    بديل بدون LLM. بدل ما يلزق كل الردود المسترجعة في فقرة واحدة ركيكة
+    (ممكن تبان متكررة أو مخلوطة بشكل غريب)، بياخد أفضل رد كإجابة أساسية،
+    وبيضيف بس المعلومات الإضافية اللي مختلفة فعلاً (مش قريبة من نفس كلام
+    الرد الأساسي) كنقط منفصلة وواضحة.
+    ده الـ fallback اللي بيشتغل بدون أي LLM API. لو فيه ANTHROPIC_API_KEY
+    متاح، generate_response تحت بتستخدم LLM حقيقي بدل الدالة دي.
+    """
     texts = []
     seen = set()
     for idx in retrieved_indices:
@@ -169,7 +199,7 @@ def merge_multiple_replies(query, documents, retrieved_indices):
             texts.append(t)
             seen.add(t)
     if not texts:
-        return "I don't have enough information to answer this question right now."
+        return "معنديش معلومة كافية للرد على السؤال ده حاليًا."
 
     primary = texts[0]
     extra = _distinct_extra_snippets(primary, texts[1:])
@@ -177,11 +207,12 @@ def merge_multiple_replies(query, documents, retrieved_indices):
         return primary
 
     extra_block = "\n".join(f"• {snippet}" for snippet in extra)
-    return f"{primary}\n\nYou might also find this helpful:\n{extra_block}"
+    return f"{primary}\n\nممكن كمان يفيدك:\n{extra_block}"
 
 
 def _distinct_extra_snippets(primary, candidates, max_extra=2):
-  
+    """بيرجع بس الردود الإضافية اللي مش شبه بعض ولا شبه الرد الأساسي،
+    عشان نتجنب تكرار نفس المعنى بصياغة مختلفة شوية."""
     def tokens(t):
         return set(t.lower().split())
 
@@ -214,12 +245,12 @@ def build_prompt(query, documents, retrieved_indices, history):
         ) + "\n\n"
 
     return (
-        "You are a customer support associate. Combine the information from previous similar responses under "
-        "In one short and appropriate response to the customer's question, without inventing information that does not exist.\n\n"
+        "إنت مساعد دعم عملاء. ادمج المعلومات من الردود السابقة المشابهة تحت "
+        "في رد واحد قصير ومناسب لسؤال العميل، من غير ما تخترع معلومات غير موجودة.\n\n"
         f"{history_block}"
-        f"Customer Question: {query}\n\n"
-        f"Previous Similar Responses:\n{context_block}\n\n"
-        "Final Answer only:"
+        f"سؤال العميل: {query}\n\n"
+        f"ردود سابقة مشابهة:\n{context_block}\n\n"
+        "الرد النهائي فقط:"
     )
 
 
@@ -230,7 +261,7 @@ def call_llm_generate(prompt):
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
     response = client.messages.create(
-        model="claude-3-5-haiku-latest",
+        model="claude-haiku-4-5-20251001",
         max_tokens=300,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -239,13 +270,19 @@ def call_llm_generate(prompt):
 
 def generate_response(query, documents, doc_brands, bm25, model, doc_embeddings,
                        history=None, brand=None, k=3, alpha=0.6):
-    
+    """
+    الدالة المحورية اللي بتجمع الميزات الأربعة الأولى مع بعض:
+      - بتفلتر على البراند لو اتطلب (3)
+      - بتجيب أعلى k رد وبتحسب الـ confidence (2)
+      - لو الثقة قليلة، بترجع رسالة تحويل للدعم البشري
+      - لو الثقة كويسة، بتولّد/تدمج الرد من الـ k ردود (1) - LLM لو متاح، وإلا extractive fallback
+    """
     history = history or []
     allowed_indices = brand_filtered_indices(doc_brands, brand)
 
     if allowed_indices is not None and len(allowed_indices) == 0:
         return {
-            "answer": f"I do not currently have an archive of previous responses for the brand '{brand}'. I will refer you to human support.",
+            "answer": f"معنديش أرشيف ردود سابقة خاص بالبراند '{brand}' حاليًا. هحوّلك لدعم بشري.",
             "used_fallback": True,
             "is_confident": False,
             "retrieved_indices": [],
@@ -260,8 +297,8 @@ def generate_response(query, documents, doc_brands, bm25, model, doc_embeddings,
     if is_low_confidence(best_score):
         return {
             "answer": (
-                "I'm sorry, but I couldn't find a sufficiently similar response in the current archive for your question. "
-                "I will connect you with a human customer service representative who can assist you further."
+                "معلش، مش لاقي رد قريب كفاية من الأرشيف الحالي لسؤالك. "
+                "هحوّلك لأحد ممثلي خدمة العملاء عشان يتابع معاك مباشرة."
             ),
             "used_fallback": True,
             "is_confident": False,
@@ -289,7 +326,12 @@ def generate_response(query, documents, doc_brands, bm25, model, doc_embeddings,
 # --- 4) تقييم جودة الرد المُولَّد (مش بس دقة الاسترجاع) ---------------------
 
 def evaluate_generated_answer(generated_answer, reference_answers, model):
-    
+    """
+    بيقيس مدى قرب الرد المولّد فعليًا من الرد/الردود الصحيحة (ground truth)
+    بالـ cosine similarity بين الـ embeddings، بدل ما نكتفي بتقييم الاسترجاع
+    (precision/recall) اللي بيقيس بس هل جبنا الـ document الصح، مش هل الرد
+    النهائي نفسه كان قريب في المعنى من إجابة حقيقية.
+    """
     if not reference_answers:
         return {"semantic_similarity": None, "best_reference": None}
 
@@ -305,7 +347,9 @@ def evaluate_generated_answer(generated_answer, reference_answers, model):
 # --- 5) ذاكرة المحادثة (Chat Memory) ----------------------------------------
 
 class ChatSession:
-   
+    """بتحتفظ بتاريخ المحادثة الكامل مع عميل واحد من أول ما يبدأ الشات لحد
+    ما يخلص، عشان كل رد جديد ياخد في الاعتبار كلامه اللي فات في نفس الجلسة."""
+
     def __init__(self, customer_id="guest", brand=None):
         self.customer_id = customer_id
         self.brand = brand
@@ -343,7 +387,7 @@ def main():
 
     # --- تجربة 1: عميل بيسأل سؤالين في نفس الجلسة (يوضح الذاكرة + الدمج) ---
     print("=" * 70)
-    print("Experiment: An entire chat session for one customer (with chat memory)")
+    print("تجربة: جلسة شات كاملة لعميل واحد (بذاكرة محادثة)")
     session = ChatSession(customer_id="customer_1")  # من غير تخصيص براند
     demo_questions = [queries[0] if queries else "my order hasn't arrived yet"]
     if len(queries) > 1:
@@ -360,7 +404,7 @@ def main():
     # --- تجربة 2: تخصيص حسب البراند ---
     print()
     print("=" * 70)
-    print("Experiment: Filtering responses by a specific brand")
+    print("تجربة: تخصيص الرد حسب براند معين")
     if queries:
         sample_brand = doc_brands[0]
         session_brand = ChatSession(customer_id="customer_2", brand=sample_brand)
@@ -371,7 +415,7 @@ def main():
     # --- تجربة 3: تقييم جودة الرد المُولَّد مقابل الإجابة الصحيحة الحقيقية ---
     print()
     print("=" * 70)
-    print("Experiment: Evaluating the quality of generated responses (Generation Quality)")
+    print("تجربة: تقييم جودة الرد المُولَّد (Generation Quality)")
     if queries:
         q = queries[0]
         reference_docs = [documents[i] for i in ground_truth[q]]
