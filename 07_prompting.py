@@ -12,7 +12,7 @@ def build_context_block(chunks: List[Dict]) -> str:
     lines = []
     for i, c in enumerate(chunks, start=1):
         brand = c.get("brand", "unknown")
-        lines.append(f"[{i}] (من دعم {brand}): {c['text']}")
+        lines.append(f"[{i}] (from support {brand}): {c['text']}")
     return "\n".join(lines)
 
 
@@ -23,7 +23,7 @@ def build_prompt(query: str, chunks: List[Dict], history: List[Dict]) -> str:
     if history:
         recent = history[-MAX_HISTORY_TURNS:]
         history_lines = [f"{h['role']}: {h['content']}" for h in recent]
-        history_block = "محادثة سابقة مع نفس العميل:\n" + "\n".join(history_lines) + "\n\n"
+        history_block = "Previous conversation with the same customer:\n" + "\n".join(history_lines) + "\n\n"
 
     prompt = (
         "You are a customer support assistant. Your job is to integrate information from previous responses."
@@ -63,7 +63,7 @@ def _extractive_fallback(query: str, chunks: List[Dict]) -> str:
         return primary
 
     extra_block = "\n".join(f"• {snippet}" for snippet in extra)
-    return f"{primary}\n\nممكن كمان يفيدك:\n{extra_block}"
+    return f"{primary}\n\n It might also help you:\n{extra_block}"
 
 
 def _distinct_extra_snippets(primary: str, candidates: List[str], max_extra: int = 2) -> List[str]:
@@ -95,14 +95,14 @@ def _distinct_extra_snippets(primary: str, candidates: List[str], max_extra: int
 
     if len(parts) == 1:
         return parts[0]
-    return " كذلك، ".join(parts[:3])
+    return " like that، ".join(parts[:3])
 
 
 def call_llm_generate(prompt: str) -> str:
     
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY غير موجود في البيئة")
+        raise RuntimeError("ANTHROPIC_API_KEY Not")
 
     import anthropic  # استيراد داخلي: مايكسرش الكود لو المكتبة مش متثبتة أصلًا
 
