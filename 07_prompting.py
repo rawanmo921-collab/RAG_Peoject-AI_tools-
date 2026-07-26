@@ -132,30 +132,20 @@ def _distinct_extra_snippets(primary: str, candidates: List[str], max_extra: int
     return kept
 
 
-def call_llm_generate(prompt: str) -> str:
-    """Calls the Claude API if an API key is available, otherwise raises
-    an exception so the calling code falls back to the extractive
-    template.
+def _get_secret(name: str) -> Optional[str]:
+    """Looks for a variable in os.environ first, then in st.secrets (if
+    running inside a Streamlit app) as a fallback."""
+    value = os.environ.get(name)
+    if value:
+        return value
+    try:
+        import streamlit as st
+        return st.secrets.get(name)
+    except Exception:
+        return None
 
-    Looks for the key in two places:
-      1. os.environ (a normal environment variable - this is what's set
-         locally with $env: or on any traditional server).
-      2. st.secrets (if the code is running inside a Streamlit app and
-         the key was set in Secrets - a fallback for cases where the
-         secret takes a moment to appear as an env var).
-    """
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
 
-    if not api_key:
-        try:
-            import streamlit as st
-            api_key = st.secrets.get("ANTHROPIC_API_KEY")
-        except Exception:
-            api_key = None
-
-    if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY not found in the environment")
-
+def _call_anthropic(prompt: str, api_key: str) -> str:
     import anthropic  # local import: doesn't break the script if the package isn't installed at all
 
     client = anthropic.Anthropic(api_key=api_key)
@@ -167,6 +157,47 @@ def call_llm_generate(prompt: str) -> str:
     return "".join(
         block.text for block in response.content if getattr(block, "type", "") == "text"
     ).strip()
+
+
+def _call_openrouter(prompt: str, api_key: str) -> str:
+    """A fully free alternative: OpenRouter offers free models (IDs ending
+    in :free) with no balance or credit card required. Its API is
+    OpenAI-compatible, so we don't use the anthropic library here, just a
+    direct HTTP call."""
+    import requests
+
+    model = os.environ.get("OPENROUTER_MODEL", "openrouter/free")
+    response = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 300,
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+    data = response.json()
+    return data["choices"][0]["message"]["content"].strip()
+
+
+def call_llm_generate(prompt: str) -> str:
+    """Calls a real LLM if an API key is available (Anthropic takes
+    priority, OpenRouter as a free fallback), otherwise raises an
+    exception so the calling code falls back to the extractive template
+    instead of crashing."""
+    anthropic_key = _get_secret("ANTHROPIC_API_KEY")
+    if anthropic_key:
+        return _call_anthropic(prompt, anthropic_key)
+
+    openrouter_key = _get_secret("OPENROUTER_API_KEY")
+    if openrouter_key:
+        return _call_openrouter(prompt, openrouter_key)
+
+    raise RuntimeError(
+        "No API key available (ANTHROPIC_API_KEY or OPENROUTER_API_KEY)"
+    )
 
 
 # ---------------------------------------------------------------------------

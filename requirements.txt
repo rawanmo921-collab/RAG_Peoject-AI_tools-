@@ -5,4 +5,5 @@ rank_bm25
 chromadb
 streamlit
 anthropic
+requests
 sentence-transformers
